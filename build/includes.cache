@@ -11,8 +11,23 @@
   },
   {
     "Sourcefile": "D:\\INAIGEM\\2024\\Laboratorio\\SOE_MEJORAS\\V3.3\\build\\sketch\\V3.3.ino.cpp",
+    "Include": "WiFiClientSecure.h",
+    "Includepath": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFiClientSecure\\src"
+  },
+  {
+    "Sourcefile": "D:\\INAIGEM\\2024\\Laboratorio\\SOE_MEJORAS\\V3.3\\build\\sketch\\V3.3.ino.cpp",
     "Include": "WiFi.h",
     "Includepath": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFi\\src"
+  },
+  {
+    "Sourcefile": "D:\\INAIGEM\\2024\\Laboratorio\\SOE_MEJORAS\\V3.3\\build\\sketch\\V3.3.ino.cpp",
+    "Include": "PubSubClient.h",
+    "Includepath": "C:\\Users\\r-rap\\OneDrive\\Documents\\Arduino\\libraries\\PubSubClient\\src"
+  },
+  {
+    "Sourcefile": "D:\\INAIGEM\\2024\\Laboratorio\\SOE_MEJORAS\\V3.3\\build\\sketch\\V3.3.ino.cpp",
+    "Include": "ArduinoJson.h",
+    "Includepath": "C:\\Users\\r-rap\\OneDrive\\Documents\\Arduino\\libraries\\ArduinoJson\\src"
   },
   {
     "Sourcefile": "D:\\INAIGEM\\2024\\Laboratorio\\SOE_MEJORAS\\V3.3\\build\\sketch\\V3.3.ino.cpp",
@@ -70,6 +85,21 @@
     "Includepath": null
   },
   {
+    "Sourcefile": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFiClientSecure\\src\\WiFiClientSecure.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFiClientSecure\\src\\esp_crt_bundle.c",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFiClientSecure\\src\\ssl_client.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
     "Sourcefile": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFi\\src\\WiFi.cpp",
     "Include": "",
     "Includepath": null
@@ -111,6 +141,11 @@
   },
   {
     "Sourcefile": "C:\\Users\\r-rap\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.9\\libraries\\WiFi\\src\\WiFiUdp.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\r-rap\\OneDrive\\Documents\\Arduino\\libraries\\PubSubClient\\src\\PubSubClient.cpp",
     "Include": "",
     "Includepath": null
   },

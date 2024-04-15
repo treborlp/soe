@@ -1,5 +1,14 @@
-#include "WiFi.h"
+// WIFI
+#include "secrets.h"
+#include <WiFiClientSecure.h>
 
+// LIBRERIA MQQT
+#include <PubSubClient.h>
+#include "WiFi.h"
+#include <ArduinoJson.h>
+
+#include <esp_crt_bundle.h>
+#include <ssl_client.h>
 // RTC
 #include <ESP32Time.h>
 ESP32Time rtc;
@@ -36,6 +45,13 @@ SPIClass spi = SPIClass(VSPI); // VSPI es una variable preasignada
 // PARAMETROS WIFI
 const char *ssid = "VisionLab_DIGC";
 const char *password = "Cr015rjhz";
+
+// VARIABLES AWS IOT CORE
+#define AWS_IOT_PUBLISH_TOPIC "SOE_PALCA/pub"
+#define AWS_IOT_SUBSCRIBE_TOPIC "SOE_PALCA/sub"
+
+WiFiClientSecure net = WiFiClientSecure();
+PubSubClient client(net);
 
 // DATOS A ALMECENAR
 String dataMessage;  // Almacenara un string con los datos concatenados de los sensores
@@ -111,6 +127,72 @@ const int sensorPin1 = 25; // seleccionar la entrada analogica para el sensor
 int sensorValue1;          // variable que almacena el valor raw (0 a 1023)
 float value1;              // variable que almacena el voltaje (0.0 a 3-5.0)v
 
+// UPDATE TIME
+const char *ntpServer = "2.south-america.pool.ntp.org"; // Servidor NTP
+const long gmtOffset_sec = -18000;                      // Desplazamiento GMT en segundos (esto es para GMT-5)
+const int daylightOffset_sec = 0;                       // Offset de horario de verano
+
+void connectAWS()
+{
+  // Configure WiFiClientSecure to use the AWS IoT device credentials
+  net.setCACert(AWS_CERT_CA);
+  net.setCertificate(AWS_CERT_CRT);
+  net.setPrivateKey(AWS_CERT_PRIVATE);
+
+  // Connect to the MQTT broker on the AWS endpoint we defined earlier
+  client.setServer(AWS_IOT_ENDPOINT, 8883);
+
+  // Create a message handler
+  client.setCallback(messageHandler);
+
+  Serial.println("Connecting to AWS IOT");
+
+  while (!client.connect(THINGNAME))
+  {
+    Serial.print(".");
+    delay(100);
+  }
+
+  if (!client.connected())
+  {
+    Serial.println("AWS IoT Timeout!");
+    return;
+  }
+
+  // Subscribe to a topic
+  client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
+
+  Serial.println("AWS IoT Connected!");
+}
+
+void publishMessage(String timeNow, int temperatura, int humedad, String windDirection, String windSpeed, String value, String value1)
+{
+
+  StaticJsonDocument<200> doc;
+  doc["time_record"] = timeNow;
+  doc["humidity"] = humedad;
+  doc["temperature"] = temperatura;
+  doc["wind_direction"] = windDirection;
+  doc["wind_speed"] = windSpeed;
+  doc["wind_value"] = value;
+  doc["wind_value1"] = value1;
+  
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer); // print to client
+
+  client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
+}
+
+void messageHandler(char* topic, byte* payload, unsigned int length)
+{
+  Serial.print("incoming: ");
+  Serial.println(topic);
+ 
+  StaticJsonDocument<200> doc;
+  deserializeJson(doc, payload);
+  const char* message = doc["message"];
+  Serial.println(message);
+}
 void loop2(void *parameter)
 {
   for (;;)
@@ -124,7 +206,7 @@ void loop2(void *parameter)
       contador++;
     }
     datoAnterior = dato;
-    Serial.println(contador);
+    //Serial.println(contador);
     delay(100);
     digitalWrite(pin_uno, LOW);
   }
@@ -144,7 +226,24 @@ void setup()
       0);
 
   Serial.begin(115200);
-  rtc.setTime(00, 30, 9, 8, 04, 2024); // rtc.setTime(s, m, h, dia, mes, año)
+  // Conexion WIFI
+  conextionWifi();
+  connectAWS();
+
+  // Configuration time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // Espera a que se obtenga el tiempo
+  while (time(nullptr) < 24 * 3600)
+  {
+    delay(100);
+  }
+
+  // Actualiza la hora en la biblioteca ESP32Time
+  rtc.setTime(time(nullptr));
+
+  // rtc.setTime(00, 30, 9, 8, 04, 2024); // rtc.setTime(s, m, h, dia, mes, año)
+
   SerialPort.begin(9600, SERIAL_8N1, 16, 17);
   pinMode(32, INPUT_PULLUP);
   pinMode(pin_dos, OUTPUT);
@@ -176,13 +275,13 @@ void setup()
   pinMode(WindSensorPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(WindSensorPin), isr_rotation, FALLING);
 
-  setModemSleep();
+  // setModemSleep();
 }
 
 void conextionWifi()
 {
   // Conecta a la red Wi-Fi
-
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED)
@@ -195,19 +294,15 @@ void conextionWifi()
   Serial.println("Dirección IP: ");
   Serial.println(WiFi.localIP());
 }
-
+int i = 0;
 void loop()
 {
-  wakeModemSleep();
-  conextionWifi();
-  Serial.println("checadndo segundos codigo rob");
+  // wakeModemSleep();
   s = rtc.getSecond();
-  if (s != 0)
-  {
-    delay(100); //(500)
-  }
-  else
-  {
+
+  //int mili =  rtc.getMillis();
+
+  if (s != 00){
     unsavedCount++;
     digitalWrite(pin_dos, LOW);
     Serial.println("En núcleo -> " + String(xPortGetCoreID()));
@@ -216,18 +311,19 @@ void loop()
     logSDCard();
     Serial.flush(); // send immediatly
     digitalWrite(pin_dos, HIGH);
-    // sei();
+    sei();
     Serial.println("go to sleep");
     m = rtc.getMinute();
     Serial.println("minuto: ");
     Serial.println(m);
     /* resetear variables */
-    setModemSleep();
+    // setModemSleep();*/
+    
   }
 
   if ((m > 58 || (m > 0 && m < 2)) && unsavedCount >= 58)
   {
-    wakeModemSleep();
+    // wakeModemSleep();
     WD_promedio = acumulador_WD / unsavedCount;
     WV_promedio = acumulador_WV / unsavedCount;
     TA_promedio = acumulador_T / unsavedCount;
@@ -235,7 +331,7 @@ void loop()
     P_promedio = acumulador_P / unsavedCount;
     TI_promedio = acumulador_TI / unsavedCount;
     logSDAver();
-    /* resetear variables */
+    //resetear variables
     unsavedCount = 0;
     contador = 0;
     acumulador_WD = 0;
@@ -253,6 +349,7 @@ void loop()
     P_min = 800;
     acumulador_TI = 0;
   }
+client.loop();
 }
 
 void setModemSleep()
@@ -354,12 +451,17 @@ void logSDCard()
   }
 
   CapturaWD();
-  // CapturaWV();
+  CapturaWV();
   CapturaIrrad();
   dataMessage = String(rtc.getTime("%B %d %Y %H:%M:%S")) + "," + String(pressure_event.pressure) + "," + String(temp_event.temperature) + "," + String(CalDirection) + "," + String(WindSpeed) + "," + String(value) + "," + String(value1) + "," + "\r\n";
   Serial.print("Save data: ");
   Serial.println(dataMessage);
   appendFile(SD, "/dataloger.csv", dataMessage.c_str());
+
+  String timeID = rtc.getTime("%y-%m-%d %H:%M:%S");
+
+  publishMessage(timeID, (double)pressure_event.pressure, (double)temp_event.temperature,  String(CalDirection), String(WindSpeed), String(value), String(value1) );
+  Serial.println("ENVIADO A AWS");
 }
 
 void logSDAver()
