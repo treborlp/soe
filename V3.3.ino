@@ -1,3 +1,6 @@
+// PROGRESS BAR
+#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
+#define PBWIDTH 60
 // WIFI
 #include "secrets.h"
 #include <WiFiClientSecure.h>
@@ -7,9 +10,9 @@
 #include "WiFi.h"
 #include <ArduinoJson.h>
 
-#include <esp_crt_bundle.h>
-#include <ssl_client.h>
-// RTC
+// #include <esp_crt_bundle.h>
+// #include <ssl_client.h>
+//  RTC
 #include <ESP32Time.h>
 ESP32Time rtc;
 RTC_DATA_ATTR
@@ -43,8 +46,12 @@ void wakeModemSleep(); // Sube la velocidad de frecuencia de trabajo a 240MHz en
 SPIClass spi = SPIClass(VSPI); // VSPI es una variable preasignada
 
 // PARAMETROS WIFI
-const char *ssid = "VisionLab_DIGC";
-const char *password = "Cr015rjhz";
+// Reemplaza con el nombre de tu red y la contraseña
+const char *ssid = "wifirob";
+const char *password = "12345678";
+unsigned long lastAttemptTime = 0;
+const int attemptInterval = 10000; // Intervalo de reconexión de 30 segundos
+boolean flagConnect = false;
 
 // VARIABLES AWS IOT CORE
 #define AWS_IOT_PUBLISH_TOPIC "SOE_PALCA/pub"
@@ -59,7 +66,7 @@ String dataMessage1; // Almacenara promedios de las mediciones
 
 int unsavedCount = 0; // Número de mediciones realizadas en un intervalo de tiempo (media hora)
 int m = 0;            //
-int s = 0;
+int currentSecond = 0;
 
 // SHT31
 #include <Wire.h>
@@ -74,6 +81,7 @@ float HR_promedio;
 float acumulador_H = 0;
 float HR_max = -10;
 float HR_min = 200;
+float acumulador_PRE = 0;
 
 uint8_t loopCnt = 0; // Evaluar
 
@@ -95,10 +103,6 @@ int contador = 0;         // Registro pulsos del balancin
 bool dato = HIGH;         // Por explicar
 bool datoAnterior = HIGH; // Por explicar
 
-// ENVIO RS485
-#include <HardwareSerial.h>
-HardwareSerial SerialPort(2); // solo se usa dos pares de puertos seriales Tx0-Rx0 y Tx1-Rx1
-
 // WIND DIRECCTION
 int VaneValue;    // Recepciona la entrada analogica (voltaje)
 int Direction;    // Transformar VaneValue a un rango de 0-360 grados
@@ -119,18 +123,99 @@ float WV_max = -10;
 float WV_min = 100;
 
 // IRRADIANCIA
-const int sensorPin = 26; // seleccionar la entrada analogica para el sensor
+const int sensorPin = 33; // seleccionar la entrada analogica para el sensor
 int sensorValue;          // variable que almacena el valor raw (0 a 1023)
 float value;              // variable que almacena el voltaje (0.0 a 25.0)
-
+float IRRA;
 const int sensorPin1 = 25; // seleccionar la entrada analogica para el sensor
 int sensorValue1;          // variable que almacena el valor raw (0 a 1023)
 float value1;              // variable que almacena el voltaje (0.0 a 3-5.0)v
+float IRRAD2;
+float Irr_promedio;
+float acumulador_Irr = 0;
+float Irr_max = -1000;
+float Irr_min = 1000;
+
+float Irr_promedio1;
+float acumulador_Irr1 = 0;
+float Irr_max1 = -1000;
+float Irr_min1 = 1000;
 
 // UPDATE TIME
 const char *ntpServer = "2.south-america.pool.ntp.org"; // Servidor NTP
 const long gmtOffset_sec = -18000;                      // Desplazamiento GMT en segundos (esto es para GMT-5)
 const int daylightOffset_sec = 0;                       // Offset de horario de verano
+
+void printProgress(double percentage)
+{
+  int val = (int)(percentage * 100);
+  int lpad = (int)(percentage * PBWIDTH);
+  int rpad = PBWIDTH - lpad;
+  Serial.print("\r"); // Regresa al inicio de la línea
+
+  String fill = "";
+  String emphy = "";
+
+ // Serial.print(val);
+ // Serial.print("% [");
+  for (int i = 0; i < lpad; i++)
+  {
+    fill = fill + "|";
+  }
+  for (int i = 0; i < rpad; i++)
+  {
+    emphy = emphy + " ";
+  }
+
+  String progressBar = String(val) + "% [" + fill + emphy + "]";
+  Serial.println(progressBar);
+
+
+}
+
+void connectToWiFi(unsigned long timeout)
+{
+  WiFi.begin(ssid, password);
+  Serial.println("CONECTANDO WIFI...");
+  unsigned long startTime = millis();
+
+  // Espera hasta que la conexión sea establecida o se agote el tiempo límite
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < timeout)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("\nWiFi CONECTADO CON EXITO");
+    Serial.print("IP ASIGNADA: ");
+    Serial.println(WiFi.localIP()); // Muestra la dirección IP asignada al ESP32
+    connectAWS();                   // Se conecta a AWS
+    flagConnect = true;
+    updateTime();
+  }
+  else
+  {
+    Serial.println("\nFalló la conexión WiFi dentro del tiempo límite.");
+    flagConnect = false;
+  }
+}
+
+void checkWiFi(unsigned long timeout)
+{
+
+  if (WiFi.status() != WL_CONNECTED || !flagConnect)
+  {
+    unsigned long currentTime = millis();
+    if (currentTime - lastAttemptTime > attemptInterval)
+    {
+      Serial.println("RECONECTANDO WIFI...");
+      connectToWiFi(timeout); // Intenta reconectarse con un tiempo límite de timeout segundos
+      lastAttemptTime = currentTime;
+    }
+  }
+}
 
 void connectAWS()
 {
@@ -145,7 +230,8 @@ void connectAWS()
   // Create a message handler
   client.setCallback(messageHandler);
 
-  Serial.println("Connecting to AWS IOT");
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO CONEXION SERVIDOR REMOTO AWS IoT");
 
   while (!client.connect(THINGNAME))
   {
@@ -155,17 +241,120 @@ void connectAWS()
 
   if (!client.connected())
   {
-    Serial.println("AWS IoT Timeout!");
+    Serial.println("ERROR: CONEXION AWS IoT TERMINADA!");
     return;
   }
 
   // Subscribe to a topic
   client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
 
-  Serial.println("AWS IoT Connected!");
+    Serial.println("CONEXION EXITOSA AWS IoT");
+
 }
 
-void publishMessage(String timeNow, int temperatura, int humedad, String windDirection, String windSpeed, String value, String value1)
+void updateTime()
+{
+
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO ACTUALIZACION DE HORARIA");
+
+  // Configuration time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // Espera a que se obtenga el tiempo
+  while (time(nullptr) < 24 * 3600)
+  {
+    delay(100);
+  }
+
+  // Actualiza la hora en la biblioteca ESP32Time
+  rtc.setTime(time(nullptr));
+
+  
+  Serial.println("FECHA Y HORA DEL SISTEMA ACTUALIZADO Y LISTO");
+  Serial.println("---------------------------");
+}
+
+void settingMemoryCard()
+{
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO MONTAJE MEMORIA SD");
+  
+  pinMode(32, INPUT_PULLUP);
+  pinMode(pin_dos, OUTPUT);
+  pinMode(pin_uno, OUTPUT);
+  spi.begin(SCK, MISO, MOSI, CS);
+  if (!SD.begin(CS, spi, 80000000))
+  {
+    Serial.println("MONTAJE MEMORIA SD FALLO");
+
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+  if (cardType == CARD_NONE)
+  {
+    Serial.println("NO SE DETECTA LA MEMORIA SD");
+
+    return;
+  }
+  Serial.printf("ESPACIO TOTAL DE MEMORIA: %lluMB\n", SD.totalBytes() / (1024 * 1024));
+  Serial.printf("ESPACIO USADO DE MEMORIA: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+  Serial.println("MONTAJE MEMORIA SD EXITOSO");
+  Serial.println("---------------------------");
+
+}
+
+void settingSensorTemperatureHumidity()
+{
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO CONFIGURACION DE SENSOR TEMPERATURA Y HUMEDAD");
+
+  sht31.begin(0x44);
+  // if (! sht31.begin(0x44)) {   // Set to 0x45 for alternate i2c addr
+  // Serial.println("Couldn't find SHT31");
+  // while (1) delay(1); }
+
+  Serial.print("ESTADO DEL CALENTADOR: ");
+  if (sht31.isHeaterEnabled())
+    Serial.println("ENABLED");
+  else
+    Serial.println("DISABLED");
+
+  Serial.println("SENSOR TEMPERATURA Y HUMEDAD LISTO");
+  Serial.println("---------------------------");
+
+}
+
+void settingBarometer()
+{
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO CONFIGURACION DEL BAROMETRO");
+  bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+
+  
+  Serial.println("SENSOR BAROMETRO LISTO");
+  Serial.println("---------------------------");
+  //bmp_temp->printSensorDetails();
+}
+
+void settingWindSensor()
+{
+  Serial.println("---------------------------");
+  Serial.println("INICIANDO CONFIGURACION SENSOR DE VIENTO");
+  // Winde velocity
+  pinMode(WindSensorPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(WindSensorPin), isr_rotation, FALLING);
+  
+  Serial.println("SENSOR DE VIENTO LISTO");
+  Serial.println("---------------------------");
+}
+
+void publishMessage(String timeNow, int temperatura, int humedad, String windDirection, String windSpeed, String value, String value1, String temperaturaAmbiental, String humedadRelativa, int preciInstantanea)
 {
 
   StaticJsonDocument<200> doc;
@@ -176,21 +365,24 @@ void publishMessage(String timeNow, int temperatura, int humedad, String windDir
   doc["wind_speed"] = windSpeed;
   doc["wind_value"] = value;
   doc["wind_value1"] = value1;
-  
+  doc["tempe_ambie"] = temperaturaAmbiental;
+  doc["humedad_relativa"] = humedadRelativa;
+  doc["precipitacion"] = preciInstantanea;
+
   char jsonBuffer[512];
   serializeJson(doc, jsonBuffer); // print to client
 
   client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
 }
 
-void messageHandler(char* topic, byte* payload, unsigned int length)
+void messageHandler(char *topic, byte *payload, unsigned int length)
 {
   Serial.print("incoming: ");
   Serial.println(topic);
- 
+
   StaticJsonDocument<200> doc;
   deserializeJson(doc, payload);
-  const char* message = doc["message"];
+  const char *message = doc["message"];
   Serial.println(message);
 }
 void loop2(void *parameter)
@@ -206,8 +398,8 @@ void loop2(void *parameter)
       contador++;
     }
     datoAnterior = dato;
-    //Serial.println(contador);
-    delay(100);
+    // Serial.println(contador);
+    delay(40);
     digitalWrite(pin_uno, LOW);
   }
   vTaskDelay(10);
@@ -226,99 +418,47 @@ void setup()
       0);
 
   Serial.begin(115200);
-  // Conexion WIFI
-  conextionWifi();
-  connectAWS();
+  connectToWiFi(10000);
 
-  // Configuration time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-  // Espera a que se obtenga el tiempo
-  while (time(nullptr) < 24 * 3600)
-  {
-    delay(100);
-  }
-
-  // Actualiza la hora en la biblioteca ESP32Time
-  rtc.setTime(time(nullptr));
-
-  // rtc.setTime(00, 30, 9, 8, 04, 2024); // rtc.setTime(s, m, h, dia, mes, año)
-
-  SerialPort.begin(9600, SERIAL_8N1, 16, 17);
-  pinMode(32, INPUT_PULLUP);
-  pinMode(pin_dos, OUTPUT);
-  pinMode(pin_uno, OUTPUT);
-  spi.begin(SCK, MISO, MOSI, CS);
-  if (!SD.begin(CS, spi, 80000000))
-  {
-    Serial.println("Card Mount Failed");
-    return;
-  }
-  uint8_t cardType = SD.cardType();
-  if (cardType == CARD_NONE)
-  {
-    Serial.println("No SD card attached");
-    return;
-  }
-  Serial.printf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
-  Serial.printf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
-
-  bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
-  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-  bmp_temp->printSensorDetails();
-
-  // Winde velocity
-  pinMode(WindSensorPin, INPUT);
-  attachInterrupt(digitalPinToInterrupt(WindSensorPin), isr_rotation, FALLING);
-
-  // setModemSleep();
+  settingMemoryCard();
+  settingSensorTemperatureHumidity();
+  settingBarometer();
+  settingWindSensor();
 }
 
-void conextionWifi()
-{
-  // Conecta a la red Wi-Fi
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.println("Conectando a la red Wi-Fi...");
-  }
-
-  Serial.println("Conectado a la red Wi-Fi");
-  Serial.println("Dirección IP: ");
-  Serial.println(WiFi.localIP());
-}
-int i = 0;
 void loop()
 {
-  // wakeModemSleep();
-  s = rtc.getSecond();
+  currentSecond = rtc.getSecond();
 
-  //int mili =  rtc.getMillis();
+  if (currentSecond == 10)
+  {
+    checkWiFi(10000); // Intenta reconectarse por 10 segundos
+  }
 
-  if (s != 00){
+  if (currentSecond < 57)
+  {
+      int value = (currentSecond * 100)/56;
+      printProgress(value / 100.0);
+      delay(1000); // Retardo para visualizar el progreso
+  }
+
+  if (currentSecond == 57)
+  {
     unsavedCount++;
     digitalWrite(pin_dos, LOW);
-    Serial.println("En núcleo -> " + String(xPortGetCoreID()));
-    Serial.println((String) "unsavedCount = " + unsavedCount);
-    Serial.println(rtc.getTime("%A, %B %d %Y %H:%M:%S")); // (String) returns time with specified format
+    //Serial.println("En núcleo -> " + String(xPortGetCoreID()));
+    //Serial.println((String) "unsavedCount = " + unsavedCount);
+    //Serial.println(rtc.getTime("%A, %B %d %Y %H:%M:%S")); // (String) returns time with specified format
+    Serial.println("**************************");
+    Serial.println("INICIANDO REGISTRO EN EN MEMORIA LOCAL");
     logSDCard();
     Serial.flush(); // send immediatly
     digitalWrite(pin_dos, HIGH);
-    sei();
-    Serial.println("go to sleep");
+    // sei();
+    //Serial.println("go to sleep");
     m = rtc.getMinute();
-    Serial.println("minuto: ");
-    Serial.println(m);
-    /* resetear variables */
-    // setModemSleep();*/
-    
+    //Serial.println("minuto: ");
+    //Serial.println(m);
   }
 
   if ((m > 58 || (m > 0 && m < 2)) && unsavedCount >= 58)
@@ -330,10 +470,22 @@ void loop()
     HR_promedio = acumulador_H / unsavedCount;
     P_promedio = acumulador_P / unsavedCount;
     TI_promedio = acumulador_TI / unsavedCount;
+    Irr_promedio = acumulador_Irr / unsavedCount;
+    Irr_promedio1 = acumulador_Irr1 / unsavedCount;
+
     logSDAver();
-    //resetear variables
+    // resetear variables
+
+    acumulador_Irr = 0;
+    Irr_max = -1000;
+    Irr_min = 1000;
+
+    acumulador_Irr1 = 0;
+    Irr_max1 = -1000;
+    Irr_min1 = 1000;
+
     unsavedCount = 0;
-    contador = 0;
+    acumulador_PRE = 0;
     acumulador_WD = 0;
     acumulador_WV = 0;
     WV_max = -10;
@@ -349,7 +501,7 @@ void loop()
     P_min = 800;
     acumulador_TI = 0;
   }
-client.loop();
+  client.loop();
 }
 
 void setModemSleep()
@@ -367,16 +519,52 @@ void wakeModemSleep()
 
 void CapturaWD()
 {
-  VaneValue = analogRead(33);
-  Direction = map(VaneValue, 0, 4095, 0, 360);
-  CalDirection = Direction + Offset;
-  if (CalDirection > 360)
-    CalDirection = CalDirection - 360;
-  if (CalDirection < 0)
-    CalDirection = CalDirection + 360;
-  Serial.print("Wind Direcction: ");
-  Serial.println(CalDirection);
-  delay(50);
+  int VaneValue = analogRead(26);
+  // Declaración de la variable que almacenará el valor mapeado
+
+  // Verifica en qué rango se encuentra el valor leído y realiza el mapeo correspondiente
+  if (VaneValue >= 0 && VaneValue <= 850)
+  {
+    Direction = map(VaneValue, 0, 850, 0, 45);
+  }
+  else if (VaneValue >= 851 && VaneValue <= 1090)
+  {
+    Direction = map(VaneValue, 851, 1090, 46, 90);
+  }
+  else if (VaneValue >= 1091 && VaneValue <= 1230)
+  {
+    Direction = map(VaneValue, 1091, 1230, 91, 135);
+  }
+  else if (VaneValue >= 1231 && VaneValue <= 1700)
+  {
+    Direction = map(VaneValue, 1231, 1700, 136, 180);
+  }
+  else if (VaneValue >= 1701 && VaneValue <= 1936)
+  {
+    Direction = map(VaneValue, 1701, 1936, 181, 225);
+  }
+  else if (VaneValue >= 1937 && VaneValue <= 2423)
+  {
+    Direction = map(VaneValue, 1937, 2423, 226, 270);
+  }
+  else if (VaneValue >= 2424 && VaneValue <= 2846)
+  {
+    Direction = map(VaneValue, 2424, 2846, 271, 315);
+  }
+  else if (VaneValue >= 2847 && VaneValue <= 3563)
+  {
+    Direction = map(VaneValue, 2847, 3563, 316, 360);
+  }
+  else
+  {
+    // Manejo de valores fuera de los rangos especificados
+    Direction = -1; // Por ejemplo, asignamos -1 para indicar un valor inválido
+  }
+  // Imprime el valor de la dirección en el Monitor Serial
+  //Serial.println(Direction);
+  // Retraso para la próxima lectura
+  delay(10);
+  CalDirection = Direction;
   acumulador_WD = acumulador_WD + CalDirection;
 }
 
@@ -384,10 +572,10 @@ void CapturaWV()
 {
   Rotations = 0; // Set Rotations count to 0 ready for calculations
   delay(3000);   // Wait 3 seconds to average
-  cli();
+  // cli();
   WindSpeed = Rotations * 0.335;
-  Serial.print("Wind speed  ");
-  Serial.println(WindSpeed);
+  //Serial.print("Wind speed  ");
+  //Serial.println(WindSpeed);
   acumulador_WV = acumulador_WV + WindSpeed;
   if (WindSpeed > WV_max)
   {
@@ -410,20 +598,63 @@ void isr_rotation()
 
 void CapturaIrrad()
 {
-  sensorValue = analogRead(sensorPin);          // realizar la lectura
-  value = fmap(sensorValue, 0, 4095, 0.0, 6.5); // ENTRE 7.1 Y 7.2
 
-  Serial.print("IO26 ");
-  Serial.println(sensorValue);
-  Serial.println(value); // mostrar el valor por serial
+  sensorValue = analogRead(sensorPin);
+  if (sensorValue >= 0 && sensorValue <= 100)
+  {
+    IRRA = map(sensorValue, 0, 4095, 0, 15000);
+  }
+  else if (sensorValue >= 101 && sensorValue <= 200)
+  {
+    IRRA = map(sensorValue, 0, 4095, 0, 6000);
+  }
+  else if (sensorValue >= 201 && sensorValue <= 450)
+  {
+    IRRA = map(sensorValue, 0, 4095, 0, 5000);
+  }
+  else if (sensorValue >= 451 && sensorValue <= 999)
+  {
+    IRRA = sensorValue;
+  } // ENTRE 6.4 Y 6.5, restar -0.09 al  value
+  else if (sensorValue >= 1000 && sensorValue <= 2500)
+  {
+    IRRA = map(sensorValue, 0, 4095, 0, 3500);
+  }
+
+ // Serial.print("irra1 ");
+  //Serial.println(IRRA);
 
   sensorValue1 = analogRead(sensorPin1);          // realizar la lectura
-  value1 = fmap(sensorValue1, 0, 4095, 0.0, 6.5); // ENTRE 7.1 Y 7.2
+  value1 = fmap(sensorValue1, 0, 4095, 0.0, 4.2); // ENTRE 7.1 Y 7.2
 
-  Serial.print("IO25 ");
-  Serial.println(sensorValue1);
-  Serial.println(value1); // mostrar el valor por serial
+  //Serial.print("IO25 ");
+ // Serial.println(sensorValue1);
+ // Serial.println(value1); // mostrar el valor por serial
+  IRRAD2 = value1 * 1000;
+  //Serial.print("IRRAD2 ");
+  //Serial.println(IRRAD2);
   delay(100);
+
+  acumulador_Irr = acumulador_Irr + IRRA;
+  acumulador_Irr1 = acumulador_Irr1 + IRRAD2;
+
+  if (IRRA > Irr_max)
+  {
+    Irr_max = IRRA;
+  }
+  if (IRRA < Irr_min)
+  {
+    Irr_min = IRRA;
+  }
+
+  if (IRRAD2 > Irr_max1)
+  {
+    Irr_max1 = value1;
+  }
+  if (IRRAD2 < Irr_min1)
+  {
+    Irr_min1 = IRRAD2;
+  }
 }
 float fmap(float x, float in_min, float in_max, float out_min, float out_max)
 {
@@ -432,7 +663,27 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max)
 
 void logSDCard()
 { // SHT31
+  float t = sht31.readTemperature();
+  float h = sht31.readHumidity();
+  acumulador_T = acumulador_T + t;
+  acumulador_H = acumulador_H + h;
 
+  if (t > TA_max)
+  {
+    TA_max = t;
+  }
+  if (t < TA_min)
+  {
+    TA_min = t;
+  }
+  if (h > HR_max)
+  {
+    HR_max = h;
+  }
+  if (h < HR_min)
+  {
+    HR_min = h;
+  }
   // BMP280
   sensors_event_t temp_event, pressure_event;
   bmp_temp->getEvent(&temp_event);
@@ -453,15 +704,48 @@ void logSDCard()
   CapturaWD();
   CapturaWV();
   CapturaIrrad();
-  dataMessage = String(rtc.getTime("%B %d %Y %H:%M:%S")) + "," + String(pressure_event.pressure) + "," + String(temp_event.temperature) + "," + String(CalDirection) + "," + String(WindSpeed) + "," + String(value) + "," + String(value1) + "," + "\r\n";
-  Serial.print("Save data: ");
-  Serial.println(dataMessage);
+
+  dataMessage = String(rtc.getTime("%B %d %Y %H:%M:%S")) + "," + String(t) + "," + String(h) + "," + String(pressure_event.pressure) + "," + String(temp_event.temperature) + "," + String(CalDirection) + "," + String(WindSpeed) + "," + String(IRRA) + "," + String(IRRAD2) + "," + String(contador) + "," + "\r\n";
+  String payload = String(t) + "," + String(h) + "," + String(pressure_event.pressure) + "," + String(temp_event.temperature) + "," + String(CalDirection) + "," + String(WindSpeed) + "," + String(IRRA) + "," + String(IRRAD2) + "," + String(contador);
+
+  Serial.println("INICIANDO REGISTRO EN SD LOCAL: " + dataMessage);
+
   appendFile(SD, "/dataloger.csv", dataMessage.c_str());
 
-  String timeID = rtc.getTime("%y-%m-%d %H:%M:%S");
+  String timeID = rtc.getTime("%Y-%m-%dT%H:%M:%S");
 
-  publishMessage(timeID, (double)pressure_event.pressure, (double)temp_event.temperature,  String(CalDirection), String(WindSpeed), String(value), String(value1) );
-  Serial.println("ENVIADO A AWS");
+  if (WiFi.status() != WL_CONNECTED || !flagConnect)
+  {
+    Serial.println("ALERTA: SE PERDIO CONEXION WIFI");
+    sendDataToBackUpFile(payload, timeID);
+  }
+  else
+  {
+    // connectAWS();
+    publishMessage(timeID, (double)pressure_event.pressure, (double)temp_event.temperature, String(CalDirection), String(WindSpeed), String(IRRA), String(IRRAD2), String(t), String(h), contador);
+    Serial.println("INFO: REGISTRO ENVIADO AL SERVIDOR AWS");
+  }
+
+  acumulador_PRE = acumulador_PRE + contador;
+
+  contador = 0;
+}
+
+void sendDataToBackUpFile(String payload, String timeID)
+{
+
+  File file = SD.open("/dataloger_backup.csv", FILE_APPEND);
+  if (file)
+  {
+    file.println(String(timeID) + "," + payload); // Asume que estás leyendo de un pin analógico
+    file.close();
+    Serial.println("REGISTRO EN SD LOCAL: BACKUP AWS ");
+
+  }
+  else
+  {
+    Serial.println("ERROR AL ABRIR ARCHIVO BACKUP AWS");
+  }
 }
 
 void logSDAver()
@@ -470,29 +754,28 @@ void logSDAver()
   Serial.print("Save data: ");
   uUnixDate dateA = uUnixDate(rtc.getYear(), rtc.getMonth() + 1, rtc.getDay(), rtc.getHour(true), rtc.getMinute(), rtc.getSecond());
   Serial.println(dateA.timestamp());
-  dataMessage = String(rtc.getTime("%B %d %Y %H:%M:%S")) + "," + String(TA_promedio) + "," + String(TA_max) + "," + String(TA_min) + "," + String(P_promedio) + "," + String(P_max) + "," + String(P_min) + "," + String(HR_promedio) + "," + String(HR_max) + "," + String(HR_min) + "," + String(WV_promedio) + "," + String(WV_max) + "," + String(WV_min) + "," + String(WD_promedio) + "," + String(contador) + "," + String(TI_promedio) + "," + "\r\n";
+  dataMessage = String(rtc.getTime("%B %d %Y %H:%M:%S")) + "," + String(TA_promedio) + "," + String(TA_max) + "," + String(TA_min) + "," + String(P_promedio) + "," + String(P_max) + "," + String(P_min) + "," + String(HR_promedio) + "," + String(HR_max) + "," + String(HR_min) + "," + String(WV_promedio) + "," + String(WV_max) + "," + String(WV_min) + "," + String(WD_promedio) + "," + String(acumulador_PRE) + "," + String(Irr_promedio) + "," + String(Irr_max) + "," + String(Irr_min) + "," + String(Irr_promedio1) + "," + String(Irr_max1) + "," + String(Irr_min1) + "," + String(TI_promedio) + "," + "\r\n";
   Serial.println(dataMessage);
   appendFile(SD, "/Ave.csv", dataMessage.c_str());
 }
 
-// Append data to the SD card (DON'T MODIFY THIS FUNCTION)
 void appendFile(fs::FS &fs, const char *path, const char *message)
 {
-  Serial.printf("Appending to file: %s\n", path);
+  Serial.printf("REGISTRANDO EN EL ARCHIVO: %s\n", path);
 
   File file = fs.open(path, FILE_APPEND);
   if (!file)
   {
-    Serial.println("Failed to open file for appending");
+    Serial.println("ERROR: ERROR AL ABRIR EL ARCHIVO DE ALMACENAMIENTO LOCAL");
     return;
   }
   if (file.print(message))
   {
-    Serial.println("Message appended");
+    Serial.println("EL REGISTRO SE COMPLETO CON EXITO");
   }
   else
   {
-    Serial.println("Append failed");
+    Serial.println("EL REGISTRO FALLO");
   }
   file.close();
 }
